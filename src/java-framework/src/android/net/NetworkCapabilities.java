@@ -115,10 +115,10 @@ public final class NetworkCapabilities implements android.os.Parcelable {
     public android.net.NetworkCapabilities removeAllForbiddenCapabilities() { return this; }
     public void restrictCapabilitesForTestNetwork(int p0) {}
     public void restrictCapabilitiesForTestNetwork(int p0) {}
-    public boolean satisfiedByImmutableNetworkCapabilities(android.net.NetworkCapabilities p0) { return false; }
-    public boolean satisfiedByNetworkCapabilities(android.net.NetworkCapabilities p0) { return false; }
-    public boolean satisfiedBySSID(android.net.NetworkCapabilities p0) { return false; }
-    public boolean satisfiedByUids(android.net.NetworkCapabilities p0) { return false; }
+    public boolean satisfiedByImmutableNetworkCapabilities(android.net.NetworkCapabilities p0) { return true; }
+    public boolean satisfiedByNetworkCapabilities(android.net.NetworkCapabilities p0) { return true; }
+    public boolean satisfiedBySSID(android.net.NetworkCapabilities p0) { return true; }
+    public boolean satisfiedByUids(android.net.NetworkCapabilities p0) { return true; }
     public void set(android.net.NetworkCapabilities p0) {}
     public void setCapabilities(int[] p0) {}
     public void setCapabilities(int[] p0, int[] p1) {}
