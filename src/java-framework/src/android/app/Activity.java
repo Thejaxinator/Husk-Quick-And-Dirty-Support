@@ -71,7 +71,6 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Ke
             android.content.res.TypedArray ta = getTheme().obtainStyledAttributes(new int[] { android.R.attr.windowNoDisplay });
             mVisibleFromClient = !ta.getBoolean(0, false);
             ta.recycle();
-            if (!mVisibleFromClient) android.util.Log.d("Husk", getClass().getName() + ": the theme says windowNoDisplay");
         } catch (RuntimeException e) { mVisibleFromClient = true; }
         if (!mFinished) onPostCreate(state);            /* as ActivityThread: an activity that finished in onCreate goes no further */
         each(c -> c.onActivityPostCreated(this, state));
@@ -119,7 +118,6 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Ke
     public final void huskActivityResult(int request, int result, Intent data) { onActivityResult(request, result, data); }
     void makeVisible() {
         View decor = getWindow().getDecorView();
-        if (System.getenv("TL_ACT_TRACE") != null) android.util.Log.d("Husk", "makeVisible " + getClass().getName() + " root " + husk.ViewRoot.of(decor) + " decor " + decor);
         if (husk.ViewRoot.of(decor) == null) getWindowManager().addView(decor, getWindow().getAttributes());
         decor.setVisibility(View.VISIBLE);
     }
