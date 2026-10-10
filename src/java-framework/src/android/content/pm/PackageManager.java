@@ -189,10 +189,21 @@ public class PackageManager {
         if (c == null) return;
         synchronized (PackageManager.class) {
             java.util.Properties p = states();
-            if (state == COMPONENT_ENABLED_STATE_DEFAULT) p.remove(c.flattenToString()); else p.setProperty(c.flattenToString(), Integer.toString(state));
-            try (java.io.FileOutputStream out = new java.io.FileOutputStream(stateFile())) { p.store(out, null); } catch (Exception e) {}
+            String k = c.flattenToString(), v = Integer.toString(state);
+            if (state == COMPONENT_ENABLED_STATE_DEFAULT ? p.remove(k) == null : v.equals(p.setProperty(k, v))) return;    /* unchanged */
+            /* written once, shortly after a burst of changes (apps set hundreds at start-up) */
+            if (sSavePending) return;
+            sSavePending = true;
         }
+        new Thread(() -> {
+            try { Thread.sleep(500); } catch (InterruptedException e) {}
+            synchronized (PackageManager.class) {
+                sSavePending = false;
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(stateFile())) { sStates.store(out, null); } catch (Exception e) {}
+            }
+        }, "husk-component-states").start();
     }
+    private static boolean sSavePending;
     public void setComponentEnabledSettings(java.util.List settings) {
         for (Object o : settings) { ComponentEnabledSetting s = (ComponentEnabledSetting) o; setComponentEnabledSetting(s.getComponentName(), s.getEnabledState(), s.getEnabledFlags()); }
     }
