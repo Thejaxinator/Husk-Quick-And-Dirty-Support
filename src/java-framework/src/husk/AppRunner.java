@@ -72,7 +72,11 @@ public final class AppRunner {
     public static Application application() { return sApp; }
 
     private static void installProviders(Application app) {
-        for (Manifest.Component p : Manifest.providers) {
+        /* as ActivityThread: providers with a higher initOrder first (Reddit builds its object graph in one that the startup
+           initializers then wait for), the rest in manifest order */
+        java.util.ArrayList<Manifest.Component> ordered = new java.util.ArrayList<>(Manifest.providers);
+        java.util.Collections.sort(ordered, (x, y) -> Integer.compare(y.initOrder, x.initOrder));
+        for (Manifest.Component p : ordered) {
             if (!p.enabled) continue;
             try {
                 ContentProvider cp = (ContentProvider) Class.forName(p.name).newInstance();

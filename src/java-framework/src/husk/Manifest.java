@@ -10,7 +10,7 @@ import org.xmlpull.v1.XmlPullParser;
 public final class Manifest {
     public static final class Component {
         public String name, kind, authorities, process, permission, parentActivity;
-        public int theme, label, icon, screenOrientation = -1, configChanges, launchMode, windowSoftInputMode, uiOptions;
+        public int theme, label, icon, screenOrientation = -1, configChanges, launchMode, windowSoftInputMode, uiOptions, initOrder;
         public boolean exported, enabled = true, grantUriPermissions;
         public Bundle metaData;
         public final ArrayList<Filter> filters = new ArrayList<>();
@@ -93,6 +93,7 @@ public final class Manifest {
                     cur.screenOrientation = p.getAttributeIntValue(NS, "screenOrientation", cur.screenOrientation);
                     cur.configChanges = p.getAttributeIntValue(NS, "configChanges", cur.configChanges);
                     cur.launchMode = p.getAttributeIntValue(NS, "launchMode", 0);
+                    cur.initOrder = p.getAttributeIntValue(NS, "initOrder", 0);
                     cur.windowSoftInputMode = p.getAttributeIntValue(NS, "windowSoftInputMode", 0);
                     cur.exported = p.getAttributeBooleanValue(NS, "exported", false);
                     cur.enabled = p.getAttributeBooleanValue(NS, "enabled", true);
