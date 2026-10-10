@@ -165,6 +165,18 @@ public final class ViewRoot implements ViewParent {
             for (int i = 0; tx != null && i < tx.length(); i++) { char ch = tx.charAt(i); if (ch < 32 || ch > 126) e.append(String.format("\\u%04x", (int) ch)); else e.append(ch); }
             b.append(" \"").append(e).append('"');
         }
+        android.graphics.drawable.Drawable bg = v.getBackground();
+        if (bg instanceof android.graphics.drawable.InsetDrawable && ((android.graphics.drawable.InsetDrawable) bg).getDrawable() != null) {
+            b.append(" bg=Inset(");
+            bg = ((android.graphics.drawable.InsetDrawable) bg).getDrawable();
+        }
+        if (bg != null) {
+            b.append(" bg=").append(bg.getClass().getSimpleName());
+            if (bg instanceof android.graphics.drawable.ColorDrawable) b.append('#').append(Integer.toHexString(((android.graphics.drawable.ColorDrawable) bg).getColor()));
+            if (bg instanceof android.graphics.drawable.GradientDrawable && ((android.graphics.drawable.GradientDrawable) bg).getColor() != null) b.append(((android.graphics.drawable.GradientDrawable) bg).getColor());
+            b.append(" alpha=").append(bg.getAlpha());
+            if (v.getBackgroundTintList() != null) b.append(" tint=").append(v.getBackgroundTintList());
+        }
         android.view.ViewGroup.LayoutParams lp = v.getLayoutParams();
         if (lp != null) {
             b.append(" lp=").append(lp.getClass().getSimpleName()).append('(').append(lp.width).append(',').append(lp.height).append(')');
