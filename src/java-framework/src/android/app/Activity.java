@@ -65,6 +65,14 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Ke
         mCalled = false;
         onCreate(state);
         if (!mCalled) throw new SuperNotCalledException("Activity " + getClass().getName() + " did not call through to super.onCreate()");
+        /* as Activity.performCreate: visibility comes from the theme after onCreate, so setVisible(false) there does not hide
+           the activity (Spotify's login calls it and never shows itself again) */
+        try {
+            android.content.res.TypedArray ta = getTheme().obtainStyledAttributes(new int[] { android.R.attr.windowNoDisplay });
+            mVisibleFromClient = !ta.getBoolean(0, false);
+            ta.recycle();
+            if (!mVisibleFromClient) android.util.Log.d("Husk", getClass().getName() + ": the theme says windowNoDisplay");
+        } catch (RuntimeException e) { mVisibleFromClient = true; }
         if (!mFinished) onPostCreate(state);            /* as ActivityThread: an activity that finished in onCreate goes no further */
         each(c -> c.onActivityPostCreated(this, state));
     }
@@ -111,6 +119,7 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Ke
     public final void huskActivityResult(int request, int result, Intent data) { onActivityResult(request, result, data); }
     void makeVisible() {
         View decor = getWindow().getDecorView();
+        if (System.getenv("TL_ACT_TRACE") != null) android.util.Log.d("Husk", "makeVisible " + getClass().getName() + " root " + husk.ViewRoot.of(decor) + " decor " + decor);
         if (husk.ViewRoot.of(decor) == null) getWindowManager().addView(decor, getWindow().getAttributes());
         decor.setVisibility(View.VISIBLE);
     }
@@ -233,7 +242,14 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Ke
     public void onDetachedFromWindow() {}
     public void onWindowAttributesChanged(WindowManager.LayoutParams p) {}
     public boolean hasWindowFocus() { View d = mWindow != null ? mWindow.peekDecorView() : null; return d != null && d.hasWindowFocus(); }
-    public void setVisible(boolean v) { mVisibleFromClient = v; if (mWindow != null && mWindow.peekDecorView() != null) mWindow.peekDecorView().setVisibility(v ? View.VISIBLE : View.INVISIBLE); }
+    /* as Android: once started, showing the activity again adds its window (Spotify's login hides itself until it has loaded) */
+    public void setVisible(boolean v) {
+        if (mVisibleFromClient == v) return;
+        mVisibleFromClient = v;
+        if (!mStarted) return;
+        if (v) makeVisible();
+        else if (mWindow != null && mWindow.peekDecorView() != null) mWindow.peekDecorView().setVisibility(View.INVISIBLE);
+    }
     public void setRequestedOrientation(int o) { mRequestedOrientation = o; husk.Native.setOrientation(o); }
     public int getRequestedOrientation() { return mRequestedOrientation; }
     public void setShowWhenLocked(boolean b) {}
