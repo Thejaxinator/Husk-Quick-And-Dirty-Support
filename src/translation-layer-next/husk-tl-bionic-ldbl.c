@@ -129,6 +129,7 @@ static int b_eperm(void) { tl_set_guest_errno(1); return -1; }
 static long b_fpathconf(int fd, int name) { (void)fd; return name == 3 /* _PC_NAME_MAX */ ? 255 : 4096; }
 static int b_dup3(int old, int nw, int flags)
 {
+    if (nw >= 0 && nw <= 2 && old != nw) return nw;                 /* stdio stays the host's (see b_dup2) */
     int r = dup2(old, nw);
     if (r >= 0 && (flags & 0x80000 /* O_CLOEXEC */)) fcntl(r, F_SETFD, FD_CLOEXEC);
     return r;
