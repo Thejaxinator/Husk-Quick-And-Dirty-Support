@@ -13,7 +13,16 @@ public class Surface implements android.os.Parcelable {
     public SurfaceView huskView;
     private boolean mReleased;
     public Surface() {}
-    public Surface(android.graphics.SurfaceTexture t) {}
+    /** The SurfaceTexture this surface feeds, when made on one. */
+    public android.graphics.SurfaceTexture huskTexture;
+    public Surface(android.graphics.SurfaceTexture t) {
+        huskTexture = t;
+        if (t != null) mProducer = new Producer() {
+            public Canvas lock(Rect d) { return t.huskLock(d); }
+            public void post(Canvas c) { t.huskPost(c); }
+            public boolean valid() { return t.huskValid(); }
+        };
+    }
     public Surface(SurfaceControl c) {}
     public boolean isValid() { return !mReleased && (mProducer == null || mProducer.valid()); }
     public void release() { mReleased = true; }

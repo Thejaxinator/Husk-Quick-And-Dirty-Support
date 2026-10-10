@@ -16,6 +16,8 @@
 
 void *tl_nwindow_native(void *window);
 int tl_nwindow_width(void *window);
+void *tl_nwindow_texture(void *window);
+void tl_nwindow_post(void *window, const void *rgba, int w, int h, bool flip);
 int tl_nwindow_height(void *window);
 
 typedef void *EGLDisplay, *EGLSurface, *EGLContext, *EGLConfig, *EGLNativeWindowType;
@@ -189,7 +191,6 @@ static EGLBoolean w_eglGetConfigAttrib(EGLDisplay d, EGLConfig c, EGLint at, EGL
     return ok;
 }
 PASS_BOOL(eglDestroyContext, (EGLDisplay d, EGLContext c), (d, c))
-PASS_BOOL(eglDestroySurface, (EGLDisplay d, EGLSurface s), (d, s))
 PASS_BOOL(eglQuerySurface, (EGLDisplay d, EGLSurface s, EGLint at, EGLint *v), (d, s, at, v))
 PASS_BOOL(eglSurfaceAttrib, (EGLDisplay d, EGLSurface s, EGLint at, EGLint v), (d, s, at, v))
 static EGLBoolean w_eglMakeCurrent(EGLDisplay d, EGLSurface dr, EGLSurface rd, EGLContext c)
@@ -247,9 +248,32 @@ static EGLint w_eglGetError(void) { return E.ready ? a_eglGetError() : 0x3001; }
 static bool g_offscreen_windows;
 /* A game that draws with Vulkan on the window's layer still makes an OpenGL ES context first, to read what the device offers. The layer is MoltenVK's, so ANGLE gets a buffer instead. */
 void tl_egl_offscreen_windows(bool on) { g_offscreen_windows = on; }
+/* surfaces made on a TextureView's window: off-screen, read back into its SurfaceTexture at each swap */
+#define MAX_TEX_SURFACES 16
+static struct { EGLSurface s; void *win; } g_tex_surf[MAX_TEX_SURFACES];
+static pthread_mutex_t g_tex_lock = PTHREAD_MUTEX_INITIALIZER;
+static void *tex_window_of(EGLSurface s)
+{
+    void *w = NULL;
+    pthread_mutex_lock(&g_tex_lock);
+    for (int i = 0; i < MAX_TEX_SURFACES; i++) if (g_tex_surf[i].s == s && s) { w = g_tex_surf[i].win; break; }
+    pthread_mutex_unlock(&g_tex_lock);
+    return w;
+}
 static EGLSurface w_eglCreateWindowSurface(EGLDisplay d, EGLConfig cfg, void *win, const EGLint *at)
 {
     cfg = cfg_real(cfg);
+    if (tl_nwindow_texture(win)) {
+        EGLint pb[] = { EGL_WIDTH, tl_nwindow_width(win), EGL_HEIGHT, tl_nwindow_height(win), EGL_NONE };
+        EGLSurface s = a_eglCreatePbufferSurface(d, cfg, pb);
+        if (s) {
+            pthread_mutex_lock(&g_tex_lock);
+            for (int i = 0; i < MAX_TEX_SURFACES; i++) if (!g_tex_surf[i].s) { g_tex_surf[i].s = s; g_tex_surf[i].win = win; break; }
+            pthread_mutex_unlock(&g_tex_lock);
+        }
+        tl_log_line("egl: TextureView window %dx%d -> off-screen surface %p", pb[1], pb[3], s);
+        return s;
+    }
     if (E.frame_dir[0] || g_offscreen_windows) {
         EGLint pb[] = { EGL_WIDTH, tl_nwindow_width(win), EGL_HEIGHT, tl_nwindow_height(win), EGL_NONE };
         EGLSurface s = a_eglCreatePbufferSurface(d, cfg, pb);
@@ -268,6 +292,13 @@ static EGLSurface w_eglCreateWindowSurface(EGLDisplay d, EGLConfig cfg, void *wi
     EGLSurface s = a_eglCreateWindowSurface(d, cfg, layer, at);
     tl_log_line("egl: window surface %p on layer %p (%dx%d), eglGetError %#x", s, layer, tl_nwindow_width(win), tl_nwindow_height(win), a_eglGetError());
     return s;
+}
+static EGLBoolean w_eglDestroySurface(EGLDisplay d, EGLSurface s)
+{
+    pthread_mutex_lock(&g_tex_lock);
+    for (int i = 0; i < MAX_TEX_SURFACES; i++) if (g_tex_surf[i].s == s) g_tex_surf[i].s = NULL;
+    pthread_mutex_unlock(&g_tex_lock);
+    return a_eglDestroySurface(d, s);
 }
 static EGLSurface w_eglCreatePbufferSurface(EGLDisplay d, EGLConfig c, const EGLint *at) { return a_eglCreatePbufferSurface(d, cfg_real(c), at); }
 
@@ -318,8 +349,29 @@ static void save_frame(EGLDisplay d, EGLSurface s, unsigned long n)
 static atomic_ulong g_glt_n, g_glt_draws, g_glt_uploads;
 void tl_egl_gl_histogram(char *out, size_t cap);
 void tl_egl_recent_calls(char *out, size_t n, int count);
+static void tex_swap(EGLDisplay d, EGLSurface s, void *win)
+{
+    EGLint w = 0, h = 0;
+    a_eglQuerySurface(d, s, EGL_WIDTH, &w); a_eglQuerySurface(d, s, EGL_HEIGHT, &h);
+    if (w <= 0 || h <= 0 || !a_glReadPixels) return;
+    static __thread uint8_t *buf; static __thread size_t cap;
+    size_t need = (size_t)w * h * 4;
+    if (need > cap) { free(buf); buf = malloc(need); cap = buf ? need : 0; }
+    if (!buf) return;
+    int old_fb = 0, old_pack = 0;
+    a_glGetIntegerv(0x8CAA /* GL_READ_FRAMEBUFFER_BINDING */, &old_fb);
+    a_glGetIntegerv(0x0D05 /* GL_PACK_ALIGNMENT */, &old_pack);
+    a_glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, 0);
+    a_glPixelStorei(0x0D05, 1);
+    a_glReadPixels(0, 0, w, h, 0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, buf);
+    a_glPixelStorei(0x0D05, old_pack);
+    a_glBindFramebuffer(0x8CA8, (unsigned)old_fb);
+    tl_nwindow_post(win, buf, w, h, true);
+}
 static EGLBoolean w_eglSwapBuffers(EGLDisplay d, EGLSurface s)
 {
+    void *texwin = tex_window_of(s);
+    if (texwin) { tex_swap(d, s, texwin); return EGL_TRUE; }
     unsigned long n = atomic_fetch_add(&E.presented, 1) + 1;
     if (n <= 3 || n % 600 == 0) {
         if (getenv("TL_GL_TRACE")) tl_log_line("egl: swap #%lu (%lu GL calls, %lu draws, %lu uploads so far)", n, (unsigned long)atomic_load(&g_glt_n), (unsigned long)atomic_load(&g_glt_draws), (unsigned long)atomic_load(&g_glt_uploads));

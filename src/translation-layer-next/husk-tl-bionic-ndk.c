@@ -21,6 +21,7 @@
 
 #include "husk-tl-internal.h"
 #include "husk-tl-ld.h"
+#include "husk-tl-jni.h"
 
 /* ---------------------------------------------------------------- looper */
 
@@ -698,8 +699,8 @@ static void b_ANativeActivity_flags(void *a, uint32_t add, uint32_t remove) { (v
 static void b_ANativeActivity_input(void *a, uint32_t flags) { (void)a; (void)flags; }
 
 
-typedef struct tl_nwindow { atomic_int refs; int width, height, format; void *layer; } tl_nwindow;
-static tl_nwindow g_window = { 1, 1080, 2400, 1, NULL };
+typedef struct tl_nwindow { atomic_int refs; int width, height, format; void *layer; jobj *texture; void *bits; } tl_nwindow;
+static tl_nwindow g_window = { 1, 1080, 2400, 1, NULL, NULL, NULL };
 
 void tl_nwindow_configure(int w, int h, void *layer) { g_window.width = w; g_window.height = h; g_window.layer = layer; }
 void tl_nwindow_resize(int w, int h) { g_window.width = w; g_window.height = h; }
@@ -707,6 +708,17 @@ void *tl_nwindow_get(void) { atomic_fetch_add(&g_window.refs, 1); return &g_wind
 void *tl_nwindow_native(void *window) { return window ? ((tl_nwindow *)window)->layer : NULL; }
 int tl_nwindow_width(void *window) { return window ? ((tl_nwindow *)window)->width : 0; }
 int tl_nwindow_height(void *window) { return window ? ((tl_nwindow *)window)->height : 0; }
+/* A window on a TextureView's SurfaceTexture (a Surface made on one): drawn off-screen, each frame handed to the texture. */
+void *tl_nwindow_texture(void *window) { return window ? ((tl_nwindow *)window)->texture : NULL; }
+/* rgba (w x h, top row first unless flip) to the texture's next frame */
+void tl_nwindow_post(void *window, const void *rgba, int w, int h, bool flip)
+{
+    tl_nwindow *win = window;
+    if (!win || !win->texture) return;
+    jvalue a[4]; a[0].j = (int64_t)(uintptr_t)rgba; a[1].i = w; a[2].i = h; a[3].z = flip;
+    tl_jni_call(win->texture, "huskPostRgba", "(JIIZ)V", a);
+    if (tl_jni_pending()) tl_jni_clear();
+}
 
 static void b_atrace_noop(void) {}
 static bool b_atrace_false(void) { return false; }
@@ -714,15 +726,53 @@ int tl_AndroidBitmap_getInfo(void *env, void *bitmap, void *info);
 int tl_AndroidBitmap_lockPixels(void *env, void *bitmap, void **addr);
 int tl_AndroidBitmap_unlockPixels(void *env, void *bitmap);
 int32_t tl_AndroidBitmap_getDataSpace(void *env, void *bitmap);
-static void *b_ANativeWindow_fromSurface(void *env, void *surface) { (void)env; (void)surface; atomic_fetch_add(&g_window.refs, 1); return &g_window; }
+static void *b_ANativeWindow_fromSurface(void *env, void *surface)
+{
+    (void)env;
+    jobj *tex = surface ? tl_jni_get_field(surface, "huskTexture", "Landroid/graphics/SurfaceTexture;").l : NULL;
+    if (tl_jni_pending()) { tl_jni_clear(); tex = NULL; }
+    if (tex) {
+        tl_nwindow *w = calloc(1, sizeof(*w));
+        atomic_store(&w->refs, 1); w->format = 1; w->texture = tl_jni_ref(tex);
+        jobj *sz = tl_jni_call(tex, "huskSize", "()[I", NULL).l;
+        if (tl_jni_pending()) tl_jni_clear();
+        if (sz && sz->arr.len >= 2) { w->width = ((int32_t *)sz->arr.data)[0]; w->height = ((int32_t *)sz->arr.data)[1]; }
+        if (w->width <= 0 || w->height <= 0) { w->width = g_window.width; w->height = g_window.height; }
+        tl_log_line("ndk: native window on a SurfaceTexture, %dx%d", w->width, w->height);
+        return w;
+    }
+    atomic_fetch_add(&g_window.refs, 1); return &g_window;
+}
 static void b_ANativeWindow_acquire(tl_nwindow *w) { if (w) atomic_fetch_add(&w->refs, 1); }
-static void b_ANativeWindow_release(tl_nwindow *w) { if (w) atomic_fetch_sub(&w->refs, 1); }
+static void b_ANativeWindow_release(tl_nwindow *w)
+{
+    if (!w) return;
+    if (atomic_fetch_sub(&w->refs, 1) == 1 && w != &g_window) { free(w->bits); free(w); }
+}
+/* software drawing (ANativeWindow_lock): only texture windows have a buffer the app can write */
+typedef struct { int32_t width, height, stride, format; void *bits; uint32_t reserved[6]; } tl_nwbuffer;
+static int b_ANativeWindow_lock(tl_nwindow *w, tl_nwbuffer *out, void *dirty)
+{
+    (void)dirty;
+    if (!w || !w->texture || !out) return -22;
+    if (!w->bits) w->bits = calloc((size_t)w->width * w->height, 4);
+    if (!w->bits) return -12;
+    out->width = w->width; out->height = w->height; out->stride = w->width; out->format = 1; out->bits = w->bits;
+    return 0;
+}
+static int b_ANativeWindow_unlockAndPost(tl_nwindow *w)
+{
+    if (!w || !w->texture || !w->bits) return -22;
+    tl_nwindow_post(w, w->bits, w->width, w->height, false);
+    return 0;
+}
 static int b_ANativeWindow_getWidth(tl_nwindow *w) { return w ? w->width : 0; }
 static int b_ANativeWindow_getHeight(tl_nwindow *w) { return w ? w->height : 0; }
 static int b_ANativeWindow_getFormat(tl_nwindow *w) { return w ? w->format : 0; }
 static int b_ANativeWindow_setBuffersGeometry(tl_nwindow *w, int width, int height, int format)
 {
-    (void)width; (void)height; (void)format; (void)w;
+    (void)format;
+    if (w && w != &g_window && width > 0 && height > 0 && (width != w->width || height != w->height)) { w->width = width; w->height = height; free(w->bits); w->bits = NULL; }
     return 0;
 }
 static void *b_ANativeWindow_toSurface(void *env, void *w) { (void)env; (void)w; return NULL; }
@@ -856,7 +906,8 @@ const tl_bionic_entry tl_tab_ndk[] = {
     TL_WRAP("ANativeWindow_release", b_ANativeWindow_release), TL_WRAP("ANativeWindow_getWidth", b_ANativeWindow_getWidth),
     TL_WRAP("ANativeWindow_getHeight", b_ANativeWindow_getHeight), TL_WRAP("ANativeWindow_getFormat", b_ANativeWindow_getFormat),
     TL_WRAP("ANativeWindow_setBuffersGeometry", b_ANativeWindow_setBuffersGeometry),
-    TL_WRAP("ANativeWindow_toSurface", b_ANativeWindow_toSurface),
+    TL_WRAP("ANativeWindow_toSurface", b_ANativeWindow_toSurface), TL_WRAP("ANativeWindow_lock", b_ANativeWindow_lock),
+    TL_WRAP("ANativeWindow_unlockAndPost", b_ANativeWindow_unlockAndPost),
     TL_WRAP("AInputQueue_attachLooper", b_AInputQueue_attachLooper), TL_WRAP("AInputQueue_detachLooper", b_AInputQueue_detachLooper),
     TL_WRAP("AInputQueue_hasEvents", b_AInputQueue_hasEvents), TL_WRAP("AInputQueue_getEvent", b_AInputQueue_getEvent),
     TL_WRAP("AInputQueue_preDispatchEvent", b_AInputQueue_preDispatchEvent), TL_WRAP("AInputQueue_finishEvent", b_AInputQueue_finishEvent),

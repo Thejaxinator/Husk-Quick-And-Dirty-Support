@@ -414,7 +414,11 @@ static void cv_free(gcanvas *v)
     CGContextRestoreGState(v->c);
     free(v);
 }
-static int cv_save(gcanvas *v, bool layer, float alpha, CGRect bounds)
+static CGBlendMode blend_of(int mode);
+static int cv_save_mode(gcanvas *v, bool layer, float alpha, CGRect bounds, int mode);
+static int cv_save(gcanvas *v, bool layer, float alpha, CGRect bounds) { return cv_save_mode(v, layer, alpha, bounds, 3); }
+/* a layer is composited on restore with the alpha and blend mode set when it began */
+static int cv_save_mode(gcanvas *v, bool layer, float alpha, CGRect bounds, int mode)
 {
     CGContextSaveGState(v->c);
     if (v->depth < 256) {
@@ -422,9 +426,11 @@ static int cv_save(gcanvas *v, bool layer, float alpha, CGRect bounds)
         if (layer) {
             v->layer_bits[v->depth >> 6] |= bit;
             CGContextSetAlpha(v->c, alpha);
+            CGContextSetBlendMode(v->c, blend_of(mode));
             if (bounds.size.width > 0 && bounds.size.height > 0) CGContextBeginTransparencyLayerWithRect(v->c, bounds, NULL);
             else CGContextBeginTransparencyLayer(v->c, NULL);
             CGContextSetAlpha(v->c, 1);
+            CGContextSetBlendMode(v->c, kCGBlendModeNormal);
         } else v->layer_bits[v->depth >> 6] &= ~bit;
     }
     return ++v->depth;
@@ -874,6 +880,14 @@ NAT(G_cvSaveLayer)
     gcanvas *v = H(gcanvas, 0);
     CGRect r = CGRectMake(a[1].f, a[2].f, a[3].f - a[1].f, a[4].f - a[2].f);
     *ret = Ii(v ? cv_save(v, true, a[5].i / 255.0f, r) : 1);
+    return true;
+}
+NAT(G_cvSaveLayerMode)
+{
+    (void)self;
+    gcanvas *v = H(gcanvas, 0);
+    CGRect r = CGRectMake(a[1].f, a[2].f, a[3].f - a[1].f, a[4].f - a[2].f);
+    *ret = Ii(v ? cv_save_mode(v, true, a[5].i / 255.0f, r, a[6].i) : 1);
     return true;
 }
 NAT(G_cvRestore) { (void)self; (void)ret; gcanvas *v = H(gcanvas, 0); if (v) cv_restore(v); return true; }
@@ -1431,7 +1445,7 @@ static const struct { const char *name, *sig; dvm_native_fn fn; } k_gfx[] = {
     { "cvNew", "(J)J", G_cvNew },
     { "cvFree", "(J)V", G_cvFree },
     { "cvSave", "(J)I", G_cvSave },
-    { "cvSaveLayer", "(JFFFFI)I", G_cvSaveLayer },
+    { "cvSaveLayer", "(JFFFFI)I", G_cvSaveLayer }, { "cvSaveLayerMode", "(JFFFFII)I", G_cvSaveLayerMode },
     { "cvRestore", "(J)V", G_cvRestore },
     { "cvRestoreTo", "(JI)V", G_cvRestoreTo },
     { "cvSaveCount", "(J)I", G_cvSaveCount },

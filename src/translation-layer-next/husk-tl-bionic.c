@@ -353,8 +353,23 @@ static void describe_caller(void *lr, char *out, size_t n)
 {
     const char *ln = NULL; const void *sa = NULL;
     const char *sym = tl_ld_symbol_at(lr, &ln, &sa);
-    if (ln) snprintf(out, n, "%s %s+%#lx", ln, sym ? sym : "?", sa ? (unsigned long)((const char *)lr - (const char *)sa) : 0ul);
+    extern void *tl_ld_lib_base(const tl_lib *L);
+    if (ln && sym) snprintf(out, n, "%s %s+%#lx", ln, sym, sa ? (unsigned long)((const char *)lr - (const char *)sa) : 0ul);
+    else if (ln) snprintf(out, n, "%s +%#lx", ln, (unsigned long)((const char *)lr - (const char *)tl_ld_lib_base(tl_ld_lib_of(lr))));
     else snprintf(out, n, "%p", lr);
+}
+/* the guest's frames above an exit or abort, by frame pointer */
+static void log_guest_frames(void *fp)
+{
+    for (int i = 0; i < 16 && fp && ((uintptr_t)fp & 7) == 0; i++) {
+        void **f = fp;
+        void *lr = f[1];
+        if (!lr) break;
+        char where[200]; describe_caller(lr, where, sizeof(where));
+        tl_log_line("bionic:   from %s", where);
+        if (f[0] <= fp) break;
+        fp = f[0];
+    }
 }
 
 static void guest_abort(const char *why)
@@ -381,6 +396,7 @@ static void bionic_exit(int status)
     char where[200];
     describe_caller(__builtin_return_address(0), where, sizeof(where));
     tl_log_line("bionic: exit(%d) called from %s", status, where);
+    log_guest_frames(__builtin_frame_address(1));
     if (tl_guest_exit_hook) tl_guest_exit_hook(status);
     exit(status);
 }
