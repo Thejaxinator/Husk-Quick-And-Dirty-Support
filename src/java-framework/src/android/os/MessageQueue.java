@@ -26,6 +26,13 @@ public final class MessageQueue {
         }
     }
     synchronized boolean has(Handler h, int what) { for (Message p = head; p != null; p = p.next) if (p.target == h && p.what == what) return true; return false; }
+    synchronized boolean has(Handler h, int what, Object obj, boolean equal) {
+        for (Message p = head; p != null; p = p.next)
+            if (p.target == h && p.what == what && (obj == null || (equal ? obj.equals(p.obj) : p.obj == obj))) return true;
+        return false;
+    }
+    synchronized boolean hasCallback(Handler h, Runnable r) { for (Message p = head; p != null; p = p.next) if (p.target == h && p.callback == r && r != null) return true; return false; }
+    synchronized boolean hasAny(Handler h) { for (Message p = head; p != null; p = p.next) if (p.target == h) return true; return false; }
     synchronized void quit() { quitting = true; notifyAll(); }
 
     private boolean mNativeLooper;

@@ -92,7 +92,13 @@ public class AudioTrack implements AudioRouting {
     public void setPlaybackPositionUpdateListener(OnPlaybackPositionUpdateListener l) { setPlaybackPositionUpdateListener(l, null); }
     public void setPlaybackPositionUpdateListener(OnPlaybackPositionUpdateListener l, android.os.Handler h) { mPosListener = l; mPosHandler = h; }
     private int frameBytes() { return mChannels * AudioFormat.bytesPerSample(mEncoding); }
-    public int getPlaybackHeadPosition() { return mId >= 0 ? (int) (husk.Audio.trackPosition(mId) - mBase) : 0; }
+    private static final boolean TRACE = System.getenv("TL_MEDIA_TRACE") != null;
+    private long mTraceAt; private long mWritten;
+    public int getPlaybackHeadPosition() {
+        int p = mId >= 0 ? (int) (husk.Audio.trackPosition(mId) - mBase) : 0;
+        if (TRACE && System.currentTimeMillis() - mTraceAt > 1000) { mTraceAt = System.currentTimeMillis(); android.util.Log.d("AudioTrack", "track " + mId + " (" + mRate + " Hz, encoding " + mEncoding + ", " + (mPlayState == PLAYSTATE_PLAYING ? "playing" : "paused") + ") at frame " + p + ", " + mWritten + " bytes written, pending " + (mId >= 0 ? husk.Audio.trackPending(mId) : -1)); }
+        return p;
+    }
     public boolean getTimestamp(AudioTimestamp ts) { if (mId < 0) return false; ts.framePosition = getPlaybackHeadPosition(); ts.nanoTime = System.nanoTime(); return true; }
     public int setLoopPoints(int start, int end, int loopCount) { mLoopCount = loopCount; return SUCCESS; }
     public int reloadStaticData() { return SUCCESS; }
@@ -163,8 +169,17 @@ public class AudioTrack implements AudioRouting {
     }
     public int write(ByteBuffer data, int size, int mode) {
         if (data == null || size < 0 || size > data.remaining()) return ERROR_BAD_VALUE;
-        byte[] b = new byte[size];
         int pos = data.position();
+        if (TRACE) mWritten += size;
+        if (mEncoding == AudioFormat.ENCODING_PCM_FLOAT) {          /* float PCM comes as bytes in a ByteBuffer too (ExoPlayer's float output) */
+            int n = size / 4;
+            float[] f = new float[n];
+            data.duplicate().order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer().get(f);
+            int w = write(f, 0, n, mode);
+            data.position(pos + Math.max(0, w) * 4);
+            return w < 0 ? w : w * 4;
+        }
+        byte[] b = new byte[size];
         data.get(b);
         int w = write(b, 0, size, mode);
         data.position(pos + Math.max(0, w));
@@ -202,7 +217,7 @@ public class AudioTrack implements AudioRouting {
     public float getAudioDescriptionMixLeveldB() { return (huskFill.get("AudioDescriptionMixLeveldB") instanceof Float ? (Float) huskFill.get("AudioDescriptionMixLeveldB") : 0f); }
     public int getDualMonoMode() { return (huskFill.get("DualMonoMode") instanceof Integer ? (Integer) huskFill.get("DualMonoMode") : 0); }
     public int getLatency() { return 0; }
-    public android.media.metrics.LogSessionId getLogSessionId() { return (android.media.metrics.LogSessionId) huskFill.get("LogSessionId"); }
+    public android.media.metrics.LogSessionId getLogSessionId() { Object v = huskFill.get("LogSessionId"); return v != null ? (android.media.metrics.LogSessionId) v : android.media.metrics.LogSessionId.LOG_SESSION_ID_NONE; }
     public android.os.PersistableBundle getMetrics() { return null; }
     protected int getNativeFrameCount() { return 0; }
     public int getOffloadDelay() { return 0; }
