@@ -1,0 +1,105 @@
+name: Build IPA
+
+# Full clean build via scripts/ci_build.sh -> Husk.ipa (sideload) + Husk.tipa (TrollStore).
+# First run is ~2-3 h (QEMU, ANGLE, virglrenderer, MoltenVK). The GPU/Vulkan stages
+# are cached, so re-runs after a late failure skip the slowest parts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch / tag / commit to build (blank = this branch)"
+        required: false
+        default: ""
+  push:
+    branches: [ "ci/**" ]
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Apple Silicon runner: build_gpu_ios.sh hardcodes /opt/homebrew/bin/{meson,ninja}.
+    runs-on: macos-26
+    timeout-minutes: 350   # GitHub-hosted hard cap is 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 1
+
+      # The vendored StikJIT.framework was built with Swift 6.4, so use the newest Xcode on the image.
+      - name: Select latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Toolchain info
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          swift --version
+          df -h /
+
+      - name: Install build tools
+        run: |
+          brew update --quiet || true
+          brew install meson ninja pkg-config xcodegen qemu
+          # Rust for the on-device pairing library
+          if ! command -v rustup >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          "$HOME/.cargo/bin/rustup" target add aarch64-apple-ios || rustup target add aarch64-apple-ios
+
+      - name: Restore download + GPU-stack cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            third_party/sources
+            build/ios-arm64/sysroot
+            build/ios-arm64/lib/MoltenVK.xcframework
+          key: husk-deps-${{ hashFiles('scripts/sources.sh', 'scripts/build_angle_ios.sh', 'scripts/build_gpu_ios.sh', 'scripts/build_moltenvk_ios.sh', 'patches/**') }}-${{ github.run_id }}
+          restore-keys: |
+            husk-deps-${{ hashFiles('scripts/sources.sh', 'scripts/build_angle_ios.sh', 'scripts/build_gpu_ios.sh', 'scripts/build_moltenvk_ios.sh', 'patches/**') }}-
+
+      - name: Build (scripts/ci_build.sh)
+        env:
+          DD: ${{ runner.temp }}/husk_ipa
+        run: ./scripts/ci_build.sh "$PWD/build/Husk.ipa"
+
+      # Saved even on failure, so a re-run doesn't redo ANGLE/MoltenVK.
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            third_party/sources
+            build/ios-arm64/sysroot
+            build/ios-arm64/lib/MoltenVK.xcframework
+          key: husk-deps-${{ hashFiles('scripts/sources.sh', 'scripts/build_angle_ios.sh', 'scripts/build_gpu_ios.sh', 'scripts/build_moltenvk_ios.sh', 'patches/**') }}-${{ github.run_id }}
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Husk-${{ github.sha }}
+          path: |
+            build/Husk.ipa
+            build/Husk.tipa
+          if-no-files-found: error
+          compression-level: 0   # already zipped
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/husk_ipa/build.log
+            build/**/*.log
+            third_party/build/**/meson-logs/meson-log.txt
+          if-no-files-found: ignore
