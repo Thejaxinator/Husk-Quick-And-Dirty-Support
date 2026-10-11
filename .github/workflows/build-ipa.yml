@@ -48,6 +48,9 @@ jobs:
         run: |
           brew update --quiet || true
           brew install meson ninja pkg-config xcodegen qemu
+          # virglrenderer's meson needs PyYAML in Homebrew's python3 (the one meson finds first).
+          /opt/homebrew/bin/python3 -m pip install --quiet --break-system-packages pyyaml
+          /opt/homebrew/bin/python3 -c "import yaml; print('PyYAML', yaml.__version__)"
           # Rust for the on-device pairing library
           if ! command -v rustup >/dev/null; then
             curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
